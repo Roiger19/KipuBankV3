@@ -10,9 +10,7 @@ To ensure the robustness of the protocol, extensive unit tests were written cove
 
 ### Coverage Results
 The protocol achieved **>50% test coverage**, meeting the strict requirements for the final delivery.
-
-> **[📸 PLACEHOLDER: PASTE YOUR COVERAGE IMAGE HERE]**
-> *(The screenshot showing the table with green percentages)*
+![COVERAGE](https://github.com/user-attachments/assets/2f3f7642-0e29-49fa-b8b0-276a434dfb70)
 
 ---
 
