@@ -9,17 +9,17 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IUniswapV2Router02} from "v2-periphery/interfaces/IUniswapV2Router02.sol";
+import "v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+
 
 /**
  * @title KipuBankV3
- * @notice Decentralized banking protocol with automatic conversion via Uniswap V2
- * @dev Vault architecture that processes deposits in ETH, USDC, and Uniswap V2-compatible ERC-20 tokens
- *      Automatically converting them to USDC. Withdrawals are exclusively denominated in USDC.
- *      Features: capacity ceilings, withdrawal limits, anti-reentrancy security, and emergency mechanisms.
+ * @notice Decentralized banking contract with Uniswap V2 integration for automatic token swaps to USDC
+ * @dev Enhanced vault system supporting ETH, USDC, and any ERC-20 token with Uniswap V2 liquidity.
+ *      All deposits are automatically converted to USDC and users can withdraw USDC only.
+ *      Features include bank capacity limits, withdrawal limits, reentrancy protection, and emergency controls.
  * @author Juan Pablo Soto Roig
  */
-
 contract KipuBankV3 is Ownable, Pausable {
     using SafeERC20 for IERC20;
 
@@ -30,7 +30,7 @@ contract KipuBankV3 is Ownable, Pausable {
     /// @notice Address representing native ETH in the contract
     address public constant ETH_ADDRESS = address(0);
 
-    /// @notice Immutable USDC token address    
+    /// @notice Immutable USDC token address
     address public immutable i_usdc;
 
     /// @notice Immutable Uniswap V2 Router interface for token swaps
@@ -43,16 +43,16 @@ contract KipuBankV3 is Ownable, Pausable {
     /// @notice Maximum total bank capacity expressed in USDC (6 decimals)
     uint256 public immutable i_bankCap;
 
-    /// @notice Maximum withdrawal limit per transaction in USDC (6 decimals)
+    /// @notice Maximum allowed amount per individual withdrawal in USDC (6 decimals)
     uint256 public immutable i_withdrawLimit;
 
-    /// @notice Total USDC balance held by the bank
+    /// @notice Total accumulated USDC balance in the bank (6 decimals)
     uint256 public s_totalUSDCBalance;
 
-    /// @notice Mapping of user addresses to their USDC balances
+    /// @notice Mapping of user addresses to their USDC balances (6 decimals)
     mapping(address => uint256) private balances;
 
-    /// @notice Reentrancy lock
+    /// @notice Reentrancy protection flag
     bool private locked;
 
     /* -------------------------------------------------------------------------- */
@@ -62,12 +62,14 @@ contract KipuBankV3 is Ownable, Pausable {
     /**
      * @notice Emitted when a deposit is made
      * @param token The token address that was deposited (address(0) for ETH)
-     * @param user address of the depositing account
+     * @param user The address of the user who deposited
      * @param tokenAmount The amount of tokens deposited
      * @param usdcAmount The amount of USDC received after swap (for non-USDC tokens)
      * @param newBalance The new USDC balance of the user
      */
-    event Deposit(address indexed token, address indexed user, uint256 tokenAmount, uint256 usdcAmount, uint256 newBalance);
+    event Deposit(
+        address indexed token, address indexed user, uint256 tokenAmount, uint256 usdcAmount, uint256 newBalance
+    );
 
     /**
      * @notice Emitted when a withdrawal is made
@@ -126,11 +128,11 @@ contract KipuBankV3 is Ownable, Pausable {
     /// @notice Thrown when a reentrancy attempt is detected
     error ReentrancyAttempt();
 
-    /// @notice Thrown when a token swap via Uniswap fails
+    /// @notice Thrown when a swap operation fails
     /// @param reason The reason for the swap failure
     error SwapFailed(string reason);
 
-    /// @notice Thrown when there is insufficient liquidity for a swap
+    /// @notice Thrown when there's insufficient liquidity for a swap
     error InsufficientLiquidity();
 
     /// @notice Thrown when an invalid USDC address is provided
@@ -146,7 +148,7 @@ contract KipuBankV3 is Ownable, Pausable {
     /**
      * @dev Prevents reentrancy attacks by checking locked state
      * @custom:error ReentrancyAttempt if contract is already locked
-     */    
+     */
     modifier nonReentrant() {
         if (locked) revert ReentrancyAttempt();
         locked = true;
@@ -165,9 +167,9 @@ contract KipuBankV3 is Ownable, Pausable {
     }
 
     /**
-     * @dev Ensures the provided token is not the USDC token
+     * @dev Ensures the provided token address is valid
      * @param token The token address to validate
-     * @custom:error InvalidToken if token is the USDC address
+     * @custom:error InvalidToken if token is the contract itself
      */
     modifier validToken(address token) {
         if (token == address(this)) revert InvalidToken(token);
@@ -175,12 +177,14 @@ contract KipuBankV3 is Ownable, Pausable {
     }
 
     /**
-     * @dev Ensures the withdrawal amount does not exceed the configured limit
+     * @dev Ensures withdrawal amount is within the allowed limit
      * @param amount The withdrawal amount to validate
-     * @custom:error WithdrawLimitExceeded if amount exceeds i_withdrawLimit
+     * @custom:error WithdrawLimitExceeded if amount exceeds the limit
      */
     modifier withinWithdrawLimit(uint256 amount) {
-        if (amount > i_withdrawLimit) revert WithdrawLimitExceeded(i_withdrawLimit, amount);
+        if (amount > i_withdrawLimit) {
+            revert WithdrawLimitExceeded(i_withdrawLimit, amount);
+        }
         _;
     }
 
@@ -198,7 +202,7 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:error ZeroAmount if bankCap or withdrawLimit is zero
      * @custom:error InvalidUSDCAddress if USDC address is zero
      * @custom:error InvalidUniswapRouter if router address is zero
-     */    
+     */
     constructor(uint256 _bankCap, uint256 _withdrawLimit, address _usdc, address _uniswapRouter) Ownable(msg.sender) {
         if (_bankCap == 0 || _withdrawLimit == 0) revert ZeroAmount();
         if (_usdc == address(0)) revert InvalidUSDCAddress();
@@ -221,14 +225,20 @@ contract KipuBankV3 is Ownable, Pausable {
      *      Executes swap to USDC and credits user's balance
      * @custom:modifier whenNotPaused Only allowed when contract is not paused
      */
-    receive() external payable whenNotPaused { _depositETH(msg.sender, msg.value); }
-    
+    receive() external payable whenNotPaused {
+        _depositETH(msg.sender, msg.value);
+    }
+
     /**
      * @notice Fallback function to handle unrecognized calls with ETH
      * @dev Processes ETH deposits even when sent with unrecognized function calls
      * @custom:modifier whenNotPaused Only allowed when contract is not paused
-     */    
-    fallback() external payable whenNotPaused { if (msg.value > 0) _depositETH(msg.sender, msg.value); }
+     */
+    fallback() external payable whenNotPaused {
+        if (msg.value > 0) {
+            _depositETH(msg.sender, msg.value);
+        }
+    }
 
     /* -------------------------------------------------------------------------- */
     /*                             PUBLIC FUNCTIONS                               */
@@ -241,7 +251,7 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:modifier validAmount Ensures deposit amount is not zero
      * @custom:modifier whenNotPaused Only allowed when contract is not paused
      * @custom:event Deposit Emitted after successful deposit
-     */    
+     */
     function depositETH() external payable nonReentrant validAmount(msg.value) whenNotPaused {
         _depositETH(msg.sender, msg.value);
     }
@@ -258,8 +268,17 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:event Deposit Emitted after successful deposit
      * @custom:error BankCapExceeded If deposit would exceed bank capacity
      */
-    function depositToken(address token, uint256 amount) external nonReentrant validAmount(amount) validToken(token) whenNotPaused {
+    function depositToken(address token, uint256 amount)
+        external
+        nonReentrant
+        validAmount(amount)
+        validToken(token)
+        whenNotPaused
+    {
+        // Transfer tokens from user to contract first
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+
+        // Handle deposit based on token type
         if (token == i_usdc) {
             _depositUSDC(msg.sender, amount);
         } else {
@@ -278,7 +297,13 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:error InsufficientBalance If user doesn't have enough balance
      * @custom:error TransferFailed If USDC transfer to user fails
      */
-    function withdrawUSDC(uint256 amount) external nonReentrant validAmount(amount) withinWithdrawLimit(amount) whenNotPaused {
+    function withdrawUSDC(uint256 amount)
+        external
+        nonReentrant
+        validAmount(amount)
+        withinWithdrawLimit(amount)
+        whenNotPaused
+    {
         _withdrawUSDC(msg.sender, amount);
     }
 
@@ -287,13 +312,17 @@ contract KipuBankV3 is Ownable, Pausable {
      * @param user Address of the user to query
      * @return balance User's USDC balance (6 decimals)
      */
-    function balanceOf(address user) external view returns (uint256) { return balances[user]; }
+    function balanceOf(address user) external view returns (uint256 balance) {
+        return balances[user];
+    }
 
     /**
      * @notice Returns the total USDC balance held by the bank
      * @return totalUSDC Total USDC balance across all users (6 decimals)
      */
-    function totalBankValueUSDC() external view returns (uint256) { return s_totalUSDCBalance; }
+    function totalBankValueUSDC() external view returns (uint256 totalUSDC) {
+        return s_totalUSDCBalance;
+    }
 
     /**
      * @notice Estimates the amount of USDC that would be received for a token swap
@@ -305,7 +334,10 @@ contract KipuBankV3 is Ownable, Pausable {
      */
     function estimateSwap(address token, uint256 amount) external view returns (uint256 usdcAmount) {
         if (token == i_usdc) return amount;
+
         address[] memory path = new address[](2);
+
+        // For ETH, use WETH in the swap path
         if (token == ETH_ADDRESS) {
             path[0] = i_uniswapRouter.WETH();
             path[1] = i_usdc;
@@ -313,6 +345,7 @@ contract KipuBankV3 is Ownable, Pausable {
             path[0] = token;
             path[1] = i_usdc;
         }
+
         try i_uniswapRouter.getAmountsOut(amount, path) returns (uint256[] memory amounts) {
             return amounts[1];
         } catch {
@@ -321,7 +354,7 @@ contract KipuBankV3 is Ownable, Pausable {
     }
 
     /* -------------------------------------------------------------------------- */
-    /*                            PRIVATE FUNCTIONS                               */
+    /*                            INTERNAL FUNCTIONS                              */
     /* -------------------------------------------------------------------------- */
 
     /**
@@ -330,9 +363,14 @@ contract KipuBankV3 is Ownable, Pausable {
      * @param amount Amount of ETH deposited (in wei)
      */
     function _depositETH(address from, uint256 amount) private {
+        uint256 userBalance = balances[from];
+        // Swap ETH to USDC via Uniswap
         uint256 usdcAmount = _swapETHToUSDC(amount);
-        _updateBalances(from, usdcAmount, true);
-        emit Deposit(ETH_ADDRESS, from, amount, usdcAmount, balances[from]);
+
+        // Update user and total balances
+        uint256 newBalance = _updateBalances(from, usdcAmount, true, userBalance);
+
+        emit Deposit(ETH_ADDRESS, from, amount, usdcAmount, newBalance);
     }
 
     /**
@@ -341,8 +379,12 @@ contract KipuBankV3 is Ownable, Pausable {
      * @param amount Amount of USDC deposited (6 decimals)
      */
     function _depositUSDC(address from, uint256 amount) private {
-        _updateBalances(from, amount, true);
-        emit Deposit(i_usdc, from, amount, amount, balances[from]);
+        uint256 userBalance = balances[from];
+
+        // Update balances (includes bank cap check)
+        uint256 newBalance = _updateBalances(from, amount, true, userBalance);
+
+        emit Deposit(i_usdc, from, amount, amount, newBalance);
     }
 
     /**
@@ -352,9 +394,15 @@ contract KipuBankV3 is Ownable, Pausable {
      * @param from Address of the user making the deposit
      */
     function _depositAndSwap(address token, uint256 amount, address from) private {
+        // Swap token to USDC via Uniswap
         uint256 usdcAmount = _swapTokenToUSDC(token, amount);
-        _updateBalances(from, usdcAmount, true);
-        emit Deposit(token, from, amount, usdcAmount, balances[from]);
+
+        uint256 userBalance = balances[from];
+
+        // Update user and total balances
+        uint256 newBalance = _updateBalances(from, usdcAmount, true, userBalance);
+
+        emit Deposit(token, from, amount, usdcAmount, newBalance);
     }
 
     /**
@@ -363,46 +411,63 @@ contract KipuBankV3 is Ownable, Pausable {
      * @param amount Amount of USDC to withdraw (6 decimals)
      */
     function _withdrawUSDC(address from, uint256 amount) private {
-        if (balances[from] < amount) revert InsufficientBalance(balances[from], amount);
-        _updateBalances(from, amount, false);
-        IERC20(i_usdc).safeTransfer(from, amount);
-        emit Withdraw(from, amount, balances[from]);
-    }
+        // Check user has sufficient balance
+        uint256 userBalance = balances[from];
 
-/**
-     * @dev Internal function to update user and total balances
-     * @param user Address of the user
-     * @param usdcAmount USDC amount to add or subtract (6 decimals)
-     * @param isDeposit True for deposit operations, false for withdrawals
-     */
-    function _updateBalances(address user, uint256 usdcAmount, bool isDeposit) private {
-        uint256 currentTotalUSDC = s_totalUSDCBalance;
-        uint256 userBalance = balances[user];
-
-        uint256 newTotalUSDC;
-        uint256 newUserBalance;
-
-        if (isDeposit) {
-            // Check overflow/cap BEFORE math to save gas on revert
-            uint256 newTotal = currentTotalUSDC + usdcAmount;
-            if (newTotal > i_bankCap) revert BankCapExceeded(i_bankCap, newTotal);
-            
-            // OPTIMIZATION: Use unchecked because we checked limits above
-            unchecked {
-                newTotalUSDC = newTotal;
-                newUserBalance = userBalance + usdcAmount;
-            }
-        } else {
-            // OPTIMIZATION: withdrawUSDC already checked sufficient balance
-            unchecked {
-                newTotalUSDC = currentTotalUSDC - usdcAmount;
-                newUserBalance = userBalance - usdcAmount;
-            }
+        if (userBalance < amount) {
+            revert InsufficientBalance(userBalance, amount);
         }
 
-        // Update storage ONCE
+        // Update balances
+        uint256 newBalance = _updateBalances(from, amount, false, userBalance);
+
+        // Transfer USDC to user
+        IERC20(i_usdc).safeTransfer(from, amount);
+
+        emit Withdraw(from, amount, newBalance);
+    }
+
+    /**
+     * @notice Updates both the user's USDC balance and the total USDC stored in the bank.
+     * @dev
+     * - If `isDeposit` is true, the function adds `usdcAmount` to the user's balance
+     *   and to the total USDC balance. It also enforces the bank capacity limit.
+     * - If `isDeposit` is false, the function subtracts `usdcAmount` from both balances.
+     * - This function performs only two storage writes for gas efficiency.
+     *
+     * @param user The address whose balance will be updated.
+     * @param usdcAmount The amount of USDC to add or subtract (6 decimals).
+     * @param isDeposit Indicates whether the operation is a deposit (true) or a withdrawal (false).
+     * @param userBalance The user's current USDC balance (passed in to save an additional SLOAD).
+     *
+     * @return newUserBalance The updated USDC balance of the user.
+     *
+     * @custom:error BankCapExceeded Thrown if a deposit causes total USDC to exceed `i_bankCap`.
+     */
+    function _updateBalances(address user, uint256 usdcAmount, bool isDeposit, uint256 userBalance)
+        private
+        returns (uint256 newUserBalance)
+    {
+        uint256 currentTotalUSDC = s_totalUSDCBalance;
+        uint256 newTotalUSDC;
+
+        if (isDeposit) {
+            newTotalUSDC = currentTotalUSDC + usdcAmount;
+            newUserBalance = userBalance + usdcAmount;
+
+            if (newTotalUSDC > i_bankCap) {
+                revert BankCapExceeded(i_bankCap, newTotalUSDC);
+            }
+        } else {
+            newTotalUSDC = currentTotalUSDC - usdcAmount;
+            newUserBalance = userBalance - usdcAmount;
+        }
+
+        // Storage writes
         balances[user] = newUserBalance;
         s_totalUSDCBalance = newTotalUSDC;
+
+        return newUserBalance;
     }
 
     /**
@@ -411,13 +476,22 @@ contract KipuBankV3 is Ownable, Pausable {
      * @return usdcAmount Amount of USDC received from swap (6 decimals)
      * @custom:event SwapExecuted Emitted after successful swap
      */
-    function _swapETHToUSDC(uint256 ethAmount) private returns (uint256) {
+    function _swapETHToUSDC(uint256 ethAmount) private returns (uint256 usdcAmount) {
         address[] memory path = new address[](2);
         path[0] = i_uniswapRouter.WETH();
         path[1] = i_usdc;
-        uint256[] memory amounts = i_uniswapRouter.swapExactETHForTokens{value: ethAmount}(1, path, address(this), block.timestamp + 15 minutes);
-        emit SwapExecuted(ETH_ADDRESS, i_usdc, ethAmount, amounts[1]);
-        return amounts[1];
+
+        uint256[] memory amounts = i_uniswapRouter.swapExactETHForTokens{value: ethAmount}(
+            1, // minimum amount out (slippage protection)
+            path,
+            address(this),
+            block.timestamp + 15 minutes
+        );
+
+        usdcAmount = amounts[1];
+
+        emit SwapExecuted(ETH_ADDRESS, i_usdc, ethAmount, usdcAmount);
+        return usdcAmount;
     }
 
     /**
@@ -427,14 +501,26 @@ contract KipuBankV3 is Ownable, Pausable {
      * @return usdcAmount Amount of USDC received from swap (6 decimals)
      * @custom:event SwapExecuted Emitted after successful swap
      */
-    function _swapTokenToUSDC(address token, uint256 amount) private returns (uint256) {
+    function _swapTokenToUSDC(address token, uint256 amount) private returns (uint256 usdcAmount) {
+        // Approve Uniswap router to spend tokens
         IERC20(token).approve(address(i_uniswapRouter), amount);
+
         address[] memory path = new address[](2);
         path[0] = token;
         path[1] = i_usdc;
-        uint256[] memory amounts = i_uniswapRouter.swapExactTokensForTokens(amount, 1, path, address(this), block.timestamp + 15 minutes);
-        emit SwapExecuted(token, i_usdc, amount, amounts[1]);
-        return amounts[1];
+
+        uint256[] memory amounts = i_uniswapRouter.swapExactTokensForTokens(
+            amount,
+            1, // minimum amount out (slippage protection)
+            path,
+            address(this),
+            block.timestamp + 15 minutes
+        );
+
+        usdcAmount = amounts[1];
+
+        emit SwapExecuted(token, i_usdc, amount, usdcAmount);
+        return usdcAmount;
     }
 
     /* -------------------------------------------------------------------------- */
@@ -447,7 +533,10 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:modifier onlyOwner Only contract owner can call this function
      * @custom:event PauseStateChanged Emitted with true when paused
      */
-    function pause() external onlyOwner { _pause(); emit PauseStateChanged(true); }
+    function pause() external onlyOwner {
+        _pause();
+        emit PauseStateChanged(true);
+    }
 
     /**
      * @notice Allows contract owner to unpause the contract
@@ -455,8 +544,11 @@ contract KipuBankV3 is Ownable, Pausable {
      * @custom:modifier onlyOwner Only contract owner can call this function
      * @custom:event PauseStateChanged Emitted with false when unpaused
      */
-    function unpause() external onlyOwner { _unpause(); emit PauseStateChanged(false); }
-    
+    function unpause() external onlyOwner {
+        _unpause();
+        emit PauseStateChanged(false);
+    }
+
     /**
      * @notice Emergency function to withdraw trapped funds from the contract
      * @dev Only for exceptional circumstances, exclusively by the owner
@@ -487,3 +579,5 @@ contract KipuBankV3 is Ownable, Pausable {
         IERC20(token).safeTransfer(owner(), amount);
     }
 }
+
+

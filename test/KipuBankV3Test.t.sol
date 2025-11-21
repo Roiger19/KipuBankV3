@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "../src/KipuBankV3.sol";
 import "./mocks/MockDeFi.sol";
 
+
 /**
  * @title KipuBankV3Test
  * @notice Comprehensive test suite for KipuBankV3 DeFi banking contract
@@ -191,6 +192,42 @@ contract KipuBankV3Test is Test {
         vm.stopPrank();
     }
 
+    /**
+     * @notice Tests bank capacity overflow protection
+     * @dev Verifies that deposits exceeding i_bankCap revert with BankCapExceeded
+     * @custom:assertion Transaction reverts when attempting to exceed bankCap
+     */
+    function testBankCapExceeded() public {
+        uint256 cap = kipuBank.i_bankCap();
+
+        // Mint enough USDC to exceed cap
+        mockDeFi.mint(user1, cap * 2);
+
+        vm.startPrank(user1);
+        mockDeFi.approve(address(kipuBank), cap * 2);
+
+        vm.expectRevert(
+            abi.encodeWithSignature(
+                "BankCapExceeded(uint256,uint256)",
+                cap,
+                cap + 1
+            )
+        );
+        kipuBank.depositToken(address(mockDeFi), cap + 1);
+        vm.stopPrank();
+    }
+
+    /**
+     * @notice Tests recovery of USDC via recoverERC20
+     * @dev Verifies that attempting to recover USDC reverts with InvalidToken
+     * @custom:assertion Transaction reverts with InvalidToken error
+     */
+    function testRecoverERC20RevertUSDC() public {
+        vm.expectRevert(abi.encodeWithSignature("InvalidToken(address)", address(mockDeFi)));
+        kipuBank.recoverERC20(address(mockDeFi), 100);
+    }
+
+
     // ========== ADMIN FUNCTIONALITY TESTS ==========
 
     /**
@@ -210,7 +247,7 @@ contract KipuBankV3Test is Test {
     }
 
     /**
-     * @notice Tests emergency withdrawal functionality
+     * @notice Tests emergency withdrawal functionality for ERC20
      * @dev Verifies that owner can withdraw tokens in emergency situations
      * @custom:step User deposits USDC tokens
      * @custom:step Owner executes emergency withdrawal
@@ -225,6 +262,30 @@ contract KipuBankV3Test is Test {
 
         kipuBank.emergencyWithdraw(address(mockDeFi), 50 * 10 ** 6);
         assertLt(mockDeFi.balanceOf(address(kipuBank)), usdcAmount);
+    }
+
+    /**
+     * @notice Tests emergency ETH withdrawal flow
+     * @dev Changes ownership to user1 so they receive ETH and withdraws from contract
+     * @custom:step Assigns ownership of KipuBankV3 to user1
+     * @custom:step Funds contract with 1 ether
+     * @custom:step Owner withdraws 0.5 ether via emergencyWithdraw
+     * @custom:assertion user1 balance increases by 0.5 ether
+     */
+    function testEmergencyWithdrawETH() public {
+        // Cambiar el owner al usuario 1 para que reciba el ETH
+        kipuBank.transferOwnership(user1);
+
+        // Fondos en el contrato
+        vm.deal(address(kipuBank), 1 ether);
+
+        uint256 beforeBal = user1.balance;
+
+        vm.prank(user1);
+        kipuBank.emergencyWithdraw(address(0), 0.5 ether);
+
+        uint256 afterBal = user1.balance;
+        assertEq(afterBal - beforeBal, 0.5 ether);
     }
 
     // ========== SKIPPED TESTS (COMPLEX INTEGRATION) ==========
@@ -274,5 +335,22 @@ contract KipuBankV3Test is Test {
         vm.stopPrank();
 
         assertGt(kipuBank.totalBankValueUSDC(), 0);
+    }
+
+    // ========== CONSTRUCTOR EDGE CASE TESTS ==========
+
+    /**
+     * @notice Tests constructor revert when router address is zero
+     * @dev Verifies that InvalidUniswapRouter error is thrown on zero router address
+     * @custom:assertion Contract deployment reverts with InvalidUniswapRouter error
+     */
+    function testConstructorInvalidRouter() public {
+        vm.expectRevert(abi.encodeWithSignature("InvalidUniswapRouter()"));
+        new KipuBankV3(
+            1000 * 10 ** 6,
+            1000 * 10 ** 6,
+            address(mockDeFi),
+            address(0)
+        );
     }
 }
