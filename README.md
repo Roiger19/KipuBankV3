@@ -29,14 +29,13 @@ The core philosophy of V3 is **"Single Asset Accounting"**. Regardless of whethe
 
 | Contract | Address | Status |
 | :--- | :--- | :--- |
-| **KipuBankV3** | `0xe1a15e7A05B82a90C50cE14935F49b69b8986c9E` | ✅ Verified |
+| **KipuBankV3** | `0xf1788cf79f41d1b840e5a0a6704cB280971B0440` | ✅ Verified |
 
-**[View verified code on Sepolia Etherscan](https://sepolia.etherscan.io/address/0xe1a15e7A05B82a90C50cE14935F49b69b8986c9E#code)**
+**[View verified code on Sepolia Etherscan](https://sepolia.etherscan.io/address/0xf1788cf79f41d1b840e5a0a6704cB280971B0440)**
 
 ### 📸 Deployment Proof
 The contract was successfully deployed and verified using Foundry scripts.
-
-![DEPLOYMENT SUCCES](https://github.com/user-attachments/assets/9017d3c7-16d0-4627-95fd-8a7a68296a20)
+![COVERAGE2 0](https://github.com/user-attachments/assets/dc5defb9-a518-4dbb-9142-f684fdef2a6c)
 
 ---
 
